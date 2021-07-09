@@ -1,0 +1,49 @@
+---
+title: "Literate analysis practice"
+output: html_document
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(readr)
+```
+
+## Introduction
+
+Link to dataset:
+
+[@Tweedie2019]
+
+### Read in data
+
+```{r message=FALSE, warning=FALSE}
+bg_chem<-read_csv("../data/BGchem2008data.csv")
+```
+
+## Analysis
+
+### Summary statistics
+
+Calculation of mean nitrate (NO3), mean nitrite (NO2), ammonium (NH4), phosphorus (P)
+
+```{r}
+nitrate <- mean(bg_chem$NO3)
+nitrite <- mean(bg_chem$NO2)
+amm <- mean(bg_chem$NH4)
+phos <- mean(bg_chem$P)
+```
+
+### mean Redfield ratio
+
+```{r}
+ratio <- (nitrate + nitrite + amm) / phos
+```
+
+The ratio is approximately `r ratio`
+
+### plot Redfield ratio
+
+```{r}
+plot(bg_chem$P, bg_chem$NO2 + bg_chem$NO3 + bg_chem$NH4)
+```
