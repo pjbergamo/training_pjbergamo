@@ -1,0 +1,244 @@
+---
+title: "Geospatial Analyses"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## libraries
+```{r}
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(leaflet)
+library(scales)
+library(ggmap)
+library(readr)
+```
+
+## Read in shapefile using sf
+
+```{r}
+ak_regions <- read_sf("../shapefiles/ak_regions_simp.shp")
+
+plot(ak_regions) ##things are a bit odd 
+
+st_crs(ak_regions) ##check the coordinate reference system
+```
+## class of sf files
+```{r}
+class(ak_regions) ##sf class (spatial/temporal) and also a data.frame class
+
+head(ak_regions) ##this means it is possible to use data.frame functions such as head
+```
+
+## Maps were odd, need to change the projection to ESPG 3338
+```{r}
+ak_regions_3338 <- ak_regions %>%
+  st_transform(crs = 3338)
+
+st_crs(ak_regions_3338)
+
+plot(ak_regions_3338)
+```
+
+## sf + tidyverse functions
+```{r}
+ak_regions_3338 %>% 
+  filter(region=="Aleutian Islands")
+```
+
+## adding data
+```{r message=FALSE}
+pop <- read_csv("../shapefiles/alaska_population.csv")
+
+class(pop) #no sf class
+```
+
+## coercing to a sf class using 4326 projection (most common lat long coords projection)
+```{r}
+pop_4326 <- st_as_sf(pop, 
+                     coords = c('lng', 'lat'), #where coords are in pop object
+                     crs = 4326, #projection
+                     remove = F) #dont remove long lat columns
+
+class(pop_4326)
+```
+
+## join
+```{r}
+pop_3338 <- st_transform(pop_4326, crs = 3338)
+
+pop_joined <- st_join(pop_3338, ak_regions_3338, join = st_within)
+
+plot(pop_joined)
+```
+
+## total population by region
+```{r}
+pop_region <- pop_joined %>%
+              as.data.frame() %>% 
+              group_by(region) %>%
+              summarise(total_pop = sum(population), .groups = "drop")
+
+head(pop_region)
+```
+
+## left join (not between two sf objects)
+```{r}
+pop_region_3338 <- left_join(ak_regions_3338, pop_region, by = "region")
+
+plot(pop_region_3338)
+```
+
+## summarising between sf objects
+```{r}
+pop_mgmt_3338 <- pop_region_3338 %>%
+                group_by(mgmt_area) %>%
+                summarize(total_pop = sum(total_pop), do_union=F) ##union mantains shapes
+
+plot(pop_mgmt_3338["total_pop"])
+```
+## writing sf objects
+```{r}
+write_sf(pop_region_3338, "../shapefiles/ak_regions_population.shp")
+```
+
+# rivers
+```{r}
+rivers_3338 <- read_sf("../shapefiles/ak_rivers_simp.shp")
+st_crs(rivers_3338)
+```
+
+
+## ggplot and sf objects
+```{r}
+ggplot() +
+  geom_sf(data = pop_region_3338, aes(fill = total_pop)) +
+  geom_sf(data = rivers_3338, aes(size = StrOrder), color = "black") +
+  geom_sf(data = pop_3338, aes(), size = .5) +
+  scale_size(range = c(0.01, 0.2), guide = F) +
+  labs(fill = "Total population") +
+  scale_fill_continuous(low = "khaki", high = "firebrick", labels = comma) + #scales package
+  theme_bw()
+```
+
+##ggmap
+
+```{r}
+pop_3857 <- pop_3338 %>%
+  st_transform(crs = 3857)
+```
+
+## making ggmap fit for 3857 projection
+```{r}
+# Define a function to fix the bbox to be in EPSG:3857
+# See https://github.com/dkahle/ggmap/issues/160#issuecomment-397055208
+ggmap_bbox_to_3857 <- function(map) {
+  if (!inherits(map, "ggmap")) stop("map must be a ggmap object")
+  # Extract the bounding box (in lat/lon) from the ggmap to a numeric vector, 
+  # and set the names to what sf::st_bbox expects:
+  map_bbox <- setNames(unlist(attr(map, "bb")), 
+                       c("ymin", "xmin", "ymax", "xmax"))
+  
+  # Coonvert the bbox to an sf polygon, transform it to 3857, 
+  # and convert back to a bbox (convoluted, but it works)
+  bbox_3857 <- st_bbox(st_transform(st_as_sfc(st_bbox(map_bbox, crs = 4326)), 3857))
+  
+  # Overwrite the bbox of the ggmap object with the transformed coordinates 
+  attr(map, "bb")$ll.lat <- bbox_3857["ymin"]
+  attr(map, "bb")$ll.lon <- bbox_3857["xmin"]
+  attr(map, "bb")$ur.lat <- bbox_3857["ymax"]
+  attr(map, "bb")$ur.lon <- bbox_3857["xmax"]
+  map
+}
+```
+
+## geting raster maps from basemaps
+```{r}
+bbox <- c(-170, 52, -130, 64)   # This is roughly southern Alaska - coords
+ak_map <- get_stamenmap(bbox, zoom = 4) #get raster maps - ggmap package
+ak_map_3857 <- ggmap_bbox_to_3857(ak_map) #passing to 3857 projection
+```
+
+## plot using ggmap and geom functions
+```{r}
+ggmap(ak_map_3857) + 
+  geom_sf(data = pop_3857, aes(color = population), inherit.aes = F) +
+  scale_color_continuous(low = "khaki", high =  "firebrick", labels = comma)
+```
+
+## leaflet
+
+### defining a projection for Alaska
+```{r}
+epsg3338 <- leaflet::leafletCRS(
+  crsClass = "L.Proj.CRS",
+  code = "EPSG:3338",
+  proj4def =  "+proj=aea +lat_1=55 +lat_2=65 +lat_0=50 +lon_0=-154 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs",
+  resolutions = 2^(16:7))
+```
+
+## leaflet demands a unprojected coordinate system (such as WGS84)
+
+```{r}
+pop_region_4326 <- pop_region_3338 %>% st_transform(crs = 4326)
+
+m <- leaflet(options = leafletOptions(crs = epsg3338)) %>%
+        addPolygons(data = pop_region_4326, 
+                    fillColor = "gray",
+                    weight = 1)
+
+m
+```
+
+## adding cool stuff
+
+```{r}
+pal <- colorNumeric(palette = "Reds", domain = pop_region_4326$total_pop)
+
+m <- leaflet(options = leafletOptions(crs = epsg3338)) %>%
+        addPolygons(data = pop_region_4326, 
+                    fillColor = ~pal(total_pop),
+                    weight = 1,
+                    color = "black",
+                    fillOpacity = 1,
+                    label = ~region) %>% 
+        addLegend(position = "bottomleft",
+                  pal = pal,
+                  values = range(pop_region_4326$total_pop),
+                  title = "Total Population")
+
+m
+```
+
+## adding communities data
+
+```{r}
+pal <- colorNumeric(palette = "Reds", domain = pop_region_4326$total_pop)
+
+m <- leaflet(options = leafletOptions(crs = epsg3338)) %>%
+        addPolygons(data = pop_region_4326, 
+                    fillColor = ~pal(total_pop),
+                    weight = 1,
+                    color = "black",
+                    fillOpacity = 1) %>% 
+        addCircleMarkers(data = pop_4326,
+                         lat = ~lat,
+                         lng = ~lng,
+                         radius = ~log(population/500), # arbitrary scaling
+                         fillColor = "gray",
+                         fillOpacity = 1,
+                         weight = 0.25,
+                         color = "black",
+                         label = ~paste0(pop_4326$city, ", population ", comma(pop_4326$population))) %>%
+        addLegend(position = "bottomleft",
+                  pal = pal,
+                  values = range(pop_region_4326$total_pop),
+                  title = "Total Population")
+
+m
+```
+
