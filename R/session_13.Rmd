@@ -1,0 +1,100 @@
+---
+title: "session_13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading packages
+```{r}
+library(rvest)
+library(readr)
+library(dplyr)
+library(janitor)
+library(ggplot2)
+```
+
+## Species common names file from the web
+```{r}
+webpage <- read_html("https://www.pwrc.usgs.gov/bbl/manual/speclist.cfm")
+
+tbls <- html_nodes(webpage, "table") %>% 
+    html_table(fill = TRUE)
+
+species <- tbls[[1]] %>% 
+    clean_names() %>% 
+    select(alpha_code, common_name) %>% 
+    mutate(alpha_code = tolower(alpha_code))
+```
+
+## Loading data
+
+```{r message=FALSE, warning=FALSE}
+predator <- read_csv("https://arcticdata.io/metacat/d1/mn/v2/object/urn%3Auuid%3A9ffec04c-7e2d-41dd-9e88-b6c2e8c4375e")
+
+nests <- read_csv("https://arcticdata.io/metacat/d1/mn/v2/object/urn%3Auuid%3A982bd2fc-4edf-4da7-96ef-0d11b853102d")
+```
+
+## Function to convert codes to common names
+
+```{r}
+code_to_common <- function(df, species) {
+  df_common <- left_join(df, species, by = c("species" = "alpha_code"))
+  df_common
+
+    if (length(which(is.na(df_common$common_name))) > 0){
+      x <- length(which(is.na(df_common$common_name)))
+      warning(paste("Common_name has", x, "NA values"))
+      
+      df_common
+    }
+}
+code_to_common(predator, species)
+```
+
+## Total number of predators by year and species
+
+```{r message=FALSE}
+predator_count <- code_to_common(predator, species) %>% 
+    group_by(year, common_name) %>% 
+    summarise(predator_count = sum(count))
+
+ggplot(predator_count, mapping = aes(year, predator_count, color=common_name)) +
+  geom_line() +
+  geom_point() +
+   labs(x = "Year", y = "Predator counts", color = "Bird") +
+  theme_classic()
+```
+
+## Total number of eggs predated by year and species
+
+```{r message=FALSE}
+eggs_predated <- code_to_common(nests, species) %>% 
+    group_by(year, common_name) %>% 
+    summarise(eggs_predated = sum(number_eggs_predated))
+
+ggplot(eggs_predated, mapping = aes(year, eggs_predated, color=common_name)) +
+  geom_line() +
+  geom_point() +
+   labs(x = "Year", y = "Eggs predated", color = "Bird") +
+  theme_classic()
+```
+
+## Total number of predators by year vs. total number of eggs predated
+
+```{r message=FALSE}
+pred_total <- code_to_common(predator, species) %>% 
+    group_by(year) %>% 
+    summarise(pred_count = sum(count))
+
+pred_total_eggs <- left_join(eggs_predated, pred_total, by = "year")
+
+ggplot(pred_total_eggs, aes(x = pred_count, y = eggs_predated)) +
+    geom_point() +
+    facet_wrap(~common_name, ncol=2, scales = "free_y") +
+    labs(x = "Predator count", y = "Eggs predated") +
+    theme_classic()
+```
+
